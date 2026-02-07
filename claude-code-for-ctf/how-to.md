@@ -1,6 +1,6 @@
 ## WSL bash script that creates the full CTF-ready structure (memory + modular rules + logs) in the current directory (or an optional target dir).
 
-```
+```bash
 cat > ctf-init.sh <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
