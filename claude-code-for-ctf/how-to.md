@@ -121,4 +121,37 @@ chmod +x ctf-init.sh
 
 ```
 
+In a new challenge folder:
+
+```bash
+mkdir -p ~/ctf/chal1 && cd ~/ctf/chal1
+/path/to/ctf-init.sh .
+```
+
+Or create everything into a target directory from anywhere:
+
+```bash
+./ctf-init.sh ~/ctf/chal2
+```
+
+Optional (but very useful): make it a command , add alias:
+
+```bash
+echo "alias ctfinit='$PWD/ctf-init.sh'" >> ~/.bashrc
+source ~/.bashrc
+```
+
+then you can do:
+
+```bash
+ctfinit .
+```
+
+## One more thing to ensure Claude actually follows it
+
+When you open Claude Code in that directory, start with:
+
+“Read notes/ATTEMPTS.md and notes/FAILURES.md first, then propose 3 hypotheses with smallest tests. Log everything.”
+
+After that, it becomes self-reinforcing because every session begins by importing the logs.
 
